@@ -9,6 +9,7 @@ const { Server } = require('socket.io');
 
 const taskRouter = require('./routes/taskRouter');
 const authRouter = require('./routes/authRouter');
+const activityLogRouter = require('./routes/activityLogRouter');
 
 const DB_PATH = process.env.MONGODB_URI;
 
@@ -37,7 +38,12 @@ io.on('connection', (socket) => {
     socket.on('task-updated', (data) => {
         socket.broadcast.emit('task-updated', data);
     });
+    socket.on('activity-logged', (data) => {
+        socket.broadcast.emit('activity-logged', data);
+    });
 });
+
+global.io = io;
 
 const store = new MongoDBStore({
     uri: DB_PATH,
@@ -52,7 +58,7 @@ app.use(session({
 }))
 
 app.use(express.json());
-app.use(express.urlencoded());
+app.use(express.urlencoded({ extended: true }));
 
 app.get('/', (req, res, next) => {
     res.send('Backend Server is running properly');
@@ -60,6 +66,7 @@ app.get('/', (req, res, next) => {
 
 app.use('/todo', taskRouter);
 app.use('/auth', authRouter);
+app.use('/activity-log', activityLogRouter);
 
 const PORT = 3001;
 

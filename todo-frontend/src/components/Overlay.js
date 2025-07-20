@@ -21,6 +21,7 @@ const Overlay = ({ onClose, fetchTasks, setAddTaskMenu, editingTask, isEditing =
 
     const [errors, setErrors] = useState({});
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [smartAssignLoading, setSmartAssignLoading] = useState(false);
 
     useEffect(() => {
         if (isEditing && editingTask) {
@@ -126,6 +127,43 @@ const Overlay = ({ onClose, fetchTasks, setAddTaskMenu, editingTask, isEditing =
         }
     };
 
+    const handleSmartAssign = async () => {
+        setSmartAssignLoading(true);
+        try {
+            const response = await fetch('http://localhost:3001/todo/smart-assign-suggestion');
+            const data = await response.json();
+            
+            if (data.success && data.suggestedUser) {
+                setFormData({ ...formData, assignedUser: data.suggestedUser.fullName });
+                // Show a brief notification
+                const notification = document.createElement('div');
+                notification.textContent = `Smart assigned to ${data.suggestedUser.fullName} (${data.suggestedUser.activeTaskCount} active tasks)`;
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    background: #2ecc71;
+                    color: white;
+                    padding: 12px 16px;
+                    border-radius: 6px;
+                    z-index: 10000;
+                    font-size: 14px;
+                `;
+                document.body.appendChild(notification);
+                setTimeout(() => {
+                    document.body.removeChild(notification);
+                }, 3000);
+            } else {
+                alert('Unable to get smart assign suggestion. Please try again.');
+            }
+        } catch (error) {
+            console.error('Error getting smart assign suggestion:', error);
+            alert('Failed to get smart assign suggestion. Please try again.');
+        } finally {
+            setSmartAssignLoading(false);
+        }
+    };
+
     return (
         <div className="overlay-background" onClick={handleBackgroundClick}>
             <div className="overlay-content">
@@ -166,12 +204,23 @@ const Overlay = ({ onClose, fetchTasks, setAddTaskMenu, editingTask, isEditing =
 
                     <div className="form-group">
                         <label>Assigned User</label>
-                        <input
-                            type="text"
-                            value={formData.assignedUser}
-                            onChange={(e) => handleInputChange('assignedUser', e.target.value)}
-                            placeholder="Enter user name"
-                        />
+                        <div className="assigned-user-input-group">
+                            <input
+                                type="text"
+                                value={formData.assignedUser}
+                                onChange={(e) => handleInputChange('assignedUser', e.target.value)}
+                                placeholder="Enter user name"
+                            />
+                            <button
+                                type="button"
+                                className={`smart-assign-btn ${smartAssignLoading ? 'loading' : ''}`}
+                                onClick={handleSmartAssign}
+                                disabled={smartAssignLoading}
+                                title="Smart assign to user with fewest active tasks"
+                            >
+                                {smartAssignLoading ? '⏳' : '🧠'}
+                            </button>
+                        </div>
                     </div>
 
                     <div className="form-group">

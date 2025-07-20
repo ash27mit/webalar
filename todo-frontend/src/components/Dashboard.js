@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import "./Dashboard.css";
 import Sidebar from "./Sidebar";
 import Overlay from "./Overlay";
+import ActivityLog from "./ActivityLog";
 import { useNavigate } from "react-router-dom";
 import io from "socket.io-client";
 
@@ -141,6 +142,7 @@ const Dashboard = () => {
   const [addTaskMenu, setAddTaskMenu] = useState(false);
   const [editTaskMenu, setEditTaskMenu] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
+  const [activityLogOpen, setActivityLogOpen] = useState(false);
   const [tasks, setTasks] = useState({
     todo: [],
     inprogress: [],
@@ -426,14 +428,24 @@ const Dashboard = () => {
           />
         )}
 
+        <ActivityLog
+          isOpen={activityLogOpen}
+          onClose={() => setActivityLogOpen(false)}
+        />
+
         <div className="top-row">
           <div className="search-in">
             <input className="search-bar" placeholder="Search tasks, users, and boards" />
             <img src="/images/magnifying-glass.svg" alt="Search" className="search-icon" />
           </div>
-          <button onClick={() => setAddTaskMenu(true)} className="add-task-btn">
-            + Add task
-          </button>
+          <div className="top-row-buttons">
+            <button onClick={() => setActivityLogOpen(true)} className="activity-log-btn">
+              📋 Activity Log
+            </button>
+            <button onClick={() => setAddTaskMenu(true)} className="add-task-btn">
+              + Add task
+            </button>
+          </div>
         </div>
         
         <hr className="ver-line"></hr>
