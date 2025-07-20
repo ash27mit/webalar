@@ -1,4 +1,6 @@
 const Task = require('../models/task');
+const User = require('../models/user');
+const { logActivity } = require('./activityLogController');
 const {check, validationResult} = require("express-validator")
 
 exports.postAddTask = [
@@ -39,6 +41,13 @@ exports.postAddTask = [
             });
 
             await task.save();
+            
+            // Log activity
+            await logActivity('create', 'task', task._id, 'system', 'System', {
+                title: task.title,
+                assignedTo: task.assignedUser,
+                priority: task.priority
+            });
             
             res.status(201).json({
                 message: 'Task created successfully',
@@ -84,6 +93,15 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
+    // Get the current task first to log the old status
+    const currentTask = await Task.findById(taskId);
+    if (!currentTask) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Task not found' 
+      });
+    }
+
     // Find and update the task
     const task = await Task.findByIdAndUpdate(
       taskId,
@@ -93,12 +111,12 @@ exports.updateTaskStatus = async (req, res) => {
       { new: true }
     );
 
-    if (!task) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Task not found' 
-      });
-    }
+    // Log activity
+    await logActivity('status_change', 'task', task._id, 'system', 'System', {
+      title: task.title,
+      oldStatus: currentTask.status,
+      newStatus: status
+    });
 
     res.status(200).json({
       success: true,
@@ -128,6 +146,12 @@ exports.updateTaskStatus = async (req, res) => {
           message: 'Task not found' 
         });
       }
+
+      // Log activity
+      await logActivity('delete', 'task', task._id, 'system', 'System', {
+        title: task.title,
+        assignedUser: task.assignedUser
+      });
   
       res.status(200).json({
         success: true,
@@ -144,90 +168,154 @@ exports.updateTaskStatus = async (req, res) => {
     }
   };
 
-exports.editTask = [
-    check('title')
-        .trim()
-        .custom(async (value, { req }) => {
-            const { taskId } = req.params;
+exports.editTask = async (req, res, next) => {
+    try {
+        const { taskId } = req.params;
+        const { title, description, assignedUser, status, priority } = req.body;
+
+        // Get the current task first
+        const currentTask = await Task.findById(taskId);
+        if (!currentTask) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Task not found' 
+            });
+        }
+
+        // Only check title uniqueness if title is being changed
+        if (title && title !== currentTask.title) {
             const existingTitle = await Task.findOne({
-                title: value,
-                _id: { $ne: taskId } // Exclude current task from uniqueness check
+                title: title,
+                _id: { $ne: taskId }
             });
             if (existingTitle) {
-                throw new Error('Title already exists');
-            }
-            return true;
-        }),
-
-    async (req, res, next) => {
-        try {
-            const { taskId } = req.params;
-            const { title, description, assignedUser, status, priority } = req.body;
-            const errors = validationResult(req);
-
-            if (!errors.isEmpty()) {
-                const errorMessages = {};
-                errors.array().forEach(error => {
-                    errorMessages[error.path] = error.msg;
-                });
-                
                 return res.status(422).json({
                     message: "Validation failed",
-                    errors: errorMessages,
+                    errors: { title: "Title already exists" },
                     success: false
                 });
             }
+        }
 
-            // Validate status and priority if provided
-            const validStatuses = ['todo', 'inprogress', 'done'];
-            const validPriorities = ['low', 'medium', 'high'];
-            
-            if (status && !validStatuses.includes(status)) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: 'Invalid status. Must be one of: todo, inprogress, done' 
-                });
-            }
-
-            if (priority && !validPriorities.includes(priority)) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: 'Invalid priority. Must be one of: low, medium, high' 
-                });
-            }
-
-            // Find and update the task
-            const task = await Task.findByIdAndUpdate(
-                taskId,
-                {
-                    title,
-                    description,
-                    assignedUser,
-                    status,
-                    priority
-                },
-                { new: true }
-            );
-
-            if (!task) {
-                return res.status(404).json({ 
-                    success: false, 
-                    message: 'Task not found' 
-                });
-            }
-            
-            res.status(200).json({
-                success: true,
-                message: 'Task updated successfully',
-                task: task
-            });
-        } catch (error) {
-            console.error('Error updating task:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to update task',
-                error: error.message
+        // Validate status and priority if provided
+        const validStatuses = ['todo', 'inprogress', 'done'];
+        const validPriorities = ['low', 'medium', 'high'];
+        
+        if (status && !validStatuses.includes(status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid status. Must be one of: todo, inprogress, done' 
             });
         }
+
+        if (priority && !validPriorities.includes(priority)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid priority. Must be one of: low, medium, high' 
+            });
+        }
+
+        // Prepare update object with only changed fields
+        const updateFields = {};
+        if (title && title !== currentTask.title) updateFields.title = title;
+        if (description !== undefined && description !== currentTask.description) updateFields.description = description;
+        if (assignedUser && assignedUser !== currentTask.assignedUser) updateFields.assignedUser = assignedUser;
+        if (status && status !== currentTask.status) updateFields.status = status;
+        if (priority && priority !== currentTask.priority) updateFields.priority = priority;
+
+        // Only update if there are changes
+        if (Object.keys(updateFields).length === 0) {
+            return res.status(200).json({
+                success: true,
+                message: 'No changes detected',
+                task: currentTask
+            });
+        }
+
+        // Find and update the task
+        const task = await Task.findByIdAndUpdate(
+            taskId,
+            updateFields,
+            { new: true }
+        );
+
+        // Log activity with details of what changed
+        const changes = Object.keys(updateFields).map(field => {
+            return `${field}: ${currentTask[field]} → ${updateFields[field]}`;
+        }).join(', ');
+
+        await logActivity('edit', 'task', task._id, 'system', 'System', {
+            title: task.title,
+            changes: changes,
+            updatedFields: Object.keys(updateFields)
+        });
+        
+        res.status(200).json({
+            success: true,
+            message: 'Task updated successfully',
+            task: task
+        });
+    } catch (error) {
+        console.error('Error updating task:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update task',
+            error: error.message
+        });
     }
-]
+}
+
+// Get smart assign suggestion - user with fewest active tasks
+exports.getSmartAssignSuggestion = async (req, res) => {
+    try {
+        // Get all users
+        const users = await User.find({}, 'fullName email').lean();
+        
+        if (users.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'No users found'
+            });
+        }
+
+        // Get task counts for each user (only active tasks: todo and inprogress)
+        const userTaskCounts = await Promise.all(
+            users.map(async (user) => {
+                const taskCount = await Task.countDocuments({
+                    assignedUser: user.fullName,
+                    status: { $in: ['todo', 'inprogress'] }
+                });
+                return {
+                    ...user,
+                    activeTaskCount: taskCount
+                };
+            })
+        );
+
+        // Sort by task count (ascending) and get the user with fewest tasks
+        const sortedUsers = userTaskCounts.sort((a, b) => a.activeTaskCount - b.activeTaskCount);
+        const suggestedUser = sortedUsers[0];
+
+        res.status(200).json({
+            success: true,
+            message: 'Smart assign suggestion retrieved successfully',
+            suggestedUser: {
+                fullName: suggestedUser.fullName,
+                email: suggestedUser.email,
+                activeTaskCount: suggestedUser.activeTaskCount
+            },
+            allUsers: sortedUsers.map(user => ({
+                fullName: user.fullName,
+                email: user.email,
+                activeTaskCount: user.activeTaskCount
+            }))
+        });
+    } catch (error) {
+        console.error('Error getting smart assign suggestion:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to get smart assign suggestion',
+            error: error.message
+        });
+    }
+}

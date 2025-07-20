@@ -14,4 +14,6 @@ taskRouter.delete('/delete-task/:taskId', taskController.deleteTask);
 
 taskRouter.put('/edit-task/:taskId', taskController.editTask);
 
+taskRouter.get('/smart-assign-suggestion', taskController.getSmartAssignSuggestion);
+
 module.exports = taskRouter;
