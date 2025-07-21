@@ -1,19 +1,18 @@
 const express = require('express');
-
-const taskRouter = express.Router();
-
+const router = express.Router();
 const taskController = require('../controllers/taskController');
 
-taskRouter.post('/add-task', taskController.postAddTask);
+router.post('/add-task', taskController.postAddTask);
+router.get('/get-task', taskController.getTask);
+router.put('/update-task-status/:taskId', taskController.updateTaskStatus);
+router.delete('/delete-task/:taskId', taskController.deleteTask);
+router.put('/edit-task/:taskId', taskController.editTask);
+router.get('/smart-assign-suggestion', taskController.getSmartAssignSuggestion);
 
-taskRouter.get('/get-task', taskController.getTask);
+// Conflict handling routes
+router.post('/lock-task/:taskId', taskController.lockTaskForEditing);
+router.post('/unlock-task/:taskId', taskController.unlockTask);
+router.get('/check-conflict/:taskId', taskController.checkTaskConflict);
+router.post('/resolve-conflict/:taskId', taskController.resolveTaskConflict);
 
-taskRouter.put('/update-task-status/:taskId', taskController.updateTaskStatus);
-
-taskRouter.delete('/delete-task/:taskId', taskController.deleteTask);
-
-taskRouter.put('/edit-task/:taskId', taskController.editTask);
-
-taskRouter.get('/smart-assign-suggestion', taskController.getSmartAssignSuggestion);
-
-module.exports = taskRouter;
+module.exports = router;

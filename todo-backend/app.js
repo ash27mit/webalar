@@ -24,22 +24,76 @@ const io = new Server(server, {
 
 app.use(cors());
 
+// Store active editing sessions
+const activeEditingSessions = new Map();
+
 io.on('connection', (socket) => {
     console.log("A user has connected", socket.id);
+    
+    // Existing events
     socket.on('task-status-updated', (data) => {
         socket.broadcast.emit('task-status-updated', data);
     });
+    
     socket.on("form-data", (data) => {
         socket.broadcast.emit("receive-form-data", data);
     });
+    
     socket.on('task-deleted', (data) => {
         socket.broadcast.emit('task-deleted', data);
     });
+    
     socket.on('task-updated', (data) => {
         socket.broadcast.emit('task-updated', data);
     });
+    
     socket.on('activity-logged', (data) => {
         socket.broadcast.emit('activity-logged', data);
+    });
+
+    // New conflict handling events
+    socket.on('task-locked', (data) => {
+        activeEditingSessions.set(data.taskId, {
+            editorId: data.editorId,
+            editorName: data.editorName,
+            socketId: socket.id,
+            editStartTime: data.editStartTime
+        });
+        socket.broadcast.emit('task-locked', data);
+    });
+
+    socket.on('task-unlocked', (data) => {
+        activeEditingSessions.delete(data.taskId);
+        socket.broadcast.emit('task-unlocked', data);
+    });
+
+    socket.on('task-conflict-detected', (data) => {
+        socket.broadcast.emit('task-conflict-detected', data);
+    });
+
+    socket.on('task-conflict-resolved', (data) => {
+        socket.broadcast.emit('task-conflict-resolved', data);
+    });
+
+    socket.on('task-editing-started', (data) => {
+        socket.broadcast.emit('task-editing-started', data);
+    });
+
+    socket.on('task-editing-stopped', (data) => {
+        socket.broadcast.emit('task-editing-stopped', data);
+    });
+
+    // Clean up editing sessions when user disconnects
+    socket.on('disconnect', () => {
+        console.log('User disconnected', socket.id);
+        
+        // Remove any editing sessions for this socket
+        for (const [taskId, session] of activeEditingSessions.entries()) {
+            if (session.socketId === socket.id) {
+                activeEditingSessions.delete(taskId);
+                socket.broadcast.emit('task-unlocked', { taskId });
+            }
+        }
     });
 });
 

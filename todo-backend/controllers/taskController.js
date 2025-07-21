@@ -3,6 +3,226 @@ const User = require('../models/user');
 const { logActivity } = require('./activityLogController');
 const {check, validationResult} = require("express-validator")
 
+// Lock/unlock task for editing
+exports.lockTaskForEditing = async (req, res) => {
+    try {
+        const { taskId } = req.params;
+        const { userId, userName } = req.body;
+
+        const task = await Task.findById(taskId);
+        if (!task) {
+            return res.status(404).json({
+                success: false,
+                message: 'Task not found'
+            });
+        }
+
+        // Check if task is already being edited by someone else
+        if (task.currentlyEditingBy && task.currentlyEditingBy !== userId) {
+            const timeSinceEdit = new Date() - task.editStartTime;
+            // If editing session is older than 5 minutes, allow override
+            if (timeSinceEdit < 5 * 60 * 1000) {
+                return res.status(409).json({
+                    success: false,
+                    message: 'Task is currently being edited by another user',
+                    currentEditor: task.currentlyEditingBy,
+                    editStartTime: task.editStartTime
+                });
+            }
+        }
+
+        // Lock the task for editing
+        task.currentlyEditingBy = userId;
+        task.editStartTime = new Date();
+        await task.save();
+
+        // Emit socket event to notify other users
+        global.io.emit('task-locked', {
+            taskId: task._id,
+            editorId: userId,
+            editorName: userName,
+            editStartTime: task.editStartTime
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Task locked for editing',
+            task
+        });
+
+    } catch (error) {
+        console.error('Error locking task:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+};
+
+exports.unlockTask = async (req, res) => {
+    try {
+        const { taskId } = req.params;
+        const { userId } = req.body;
+
+        const task = await Task.findById(taskId);
+        if (!task) {
+            return res.status(404).json({
+                success: false,
+                message: 'Task not found'
+            });
+        }
+
+        // Only allow unlocking if the user is the current editor
+        if (task.currentlyEditingBy !== userId) {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not the current editor of this task'
+            });
+        }
+
+        // Unlock the task
+        task.currentlyEditingBy = null;
+        task.editStartTime = null;
+        await task.save();
+
+        // Emit socket event to notify other users
+        global.io.emit('task-unlocked', {
+            taskId: task._id
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Task unlocked'
+        });
+
+    } catch (error) {
+        console.error('Error unlocking task:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+};
+
+exports.checkTaskConflict = async (req, res) => {
+    try {
+        const { taskId } = req.params;
+        const { version } = req.query;
+
+        const task = await Task.findById(taskId);
+        if (!task) {
+            return res.status(404).json({
+                success: false,
+                message: 'Task not found'
+            });
+        }
+
+        const hasConflict = task.version > parseInt(version);
+
+        res.status(200).json({
+            success: true,
+            hasConflict,
+            currentVersion: task.version,
+            requestedVersion: parseInt(version),
+            task: hasConflict ? task : null
+        });
+
+    } catch (error) {
+        console.error('Error checking task conflict:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+};
+
+exports.resolveTaskConflict = async (req, res) => {
+    try {
+        const { taskId } = req.params;
+        const { resolution, userChanges, currentVersion } = req.body;
+
+        const task = await Task.findById(taskId);
+        if (!task) {
+            return res.status(404).json({
+                success: false,
+                message: 'Task not found'
+            });
+        }
+
+        let resolvedTask;
+
+        switch (resolution) {
+            case 'overwrite':
+                // Apply user changes, overwriting current version
+                Object.assign(task, userChanges);
+                task.lastModifiedBy = req.body.userId || 'user';
+                resolvedTask = await task.save();
+                break;
+
+            case 'merge':
+                // Merge changes intelligently
+                const mergedChanges = {};
+                
+                // For simple fields, take user version if different from original
+                ['title', 'description', 'assignedUser', 'priority'].forEach(field => {
+                    if (userChanges[field] !== undefined) {
+                        mergedChanges[field] = userChanges[field];
+                    }
+                });
+
+                // For status, prefer the most recent change
+                if (userChanges.status !== undefined) {
+                    mergedChanges.status = userChanges.status;
+                }
+
+                Object.assign(task, mergedChanges);
+                task.lastModifiedBy = req.body.userId || 'user';
+                resolvedTask = await task.save();
+                break;
+
+            case 'discard':
+                // Keep current version, discard user changes
+                resolvedTask = task;
+                break;
+
+            default:
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid resolution type'
+                });
+        }
+
+        // Log the conflict resolution
+        await logActivity('conflict_resolved', 'task', task._id, req.body.userId || 'system', req.body.userName || 'System', {
+            title: task.title,
+            resolution: resolution,
+            conflictVersion: currentVersion,
+            resolvedVersion: resolvedTask.version
+        });
+
+        // Emit socket event to notify other users
+        global.io.emit('task-conflict-resolved', {
+            taskId: task._id,
+            task: resolvedTask,
+            resolution
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Conflict resolved successfully',
+            task: resolvedTask,
+            resolution
+        });
+
+    } catch (error) {
+        console.error('Error resolving task conflict:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+};
+
 exports.postAddTask = [
     check('title')
         .trim()
@@ -37,12 +257,13 @@ exports.postAddTask = [
                 description,
                 assignedUser,
                 status,
-                priority
+                priority,
+                lastModifiedBy: req.body.userId || 'system'
             });
 
             await task.save();
 
-            await logActivity('create', 'task', task._id, 'system', 'System', {
+            await logActivity('create', 'task', task._id, req.body.userId || 'system', req.body.userName || 'System', {
               title: task.title,
               assignedTo: task.assignedUser,
               priority: task.priority
@@ -64,7 +285,7 @@ exports.postAddTask = [
 
 exports.getTask = async (req, res, next) => {
   try {
-      const tasks = await Task.find();
+      const tasks = await Task.find().sort({ createdAt: -1 });
       res.status(200).json({
           message: 'Tasks fetched successfully',
           tasks: tasks
@@ -81,7 +302,7 @@ exports.getTask = async (req, res, next) => {
 exports.updateTaskStatus = async (req, res) => {
   try {
     const { taskId } = req.params;
-    const { status } = req.body;
+    const { status, version } = req.body;
 
     // Validate status
     const validStatuses = ['todo', 'inprogress', 'done'];
@@ -100,23 +321,29 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
+    // Check for version conflict if version is provided
+    if (version && currentTask.version > version) {
+      return res.status(409).json({
+        success: false,
+        message: 'Task has been modified by another user',
+        conflict: true,
+        currentTask: currentTask,
+        requestedVersion: version,
+        currentVersion: currentTask.version
+      });
+    }
+
     // Find and update the task
     const task = await Task.findByIdAndUpdate(
       taskId,
       { 
         status,
+        lastModifiedBy: req.body.userId || 'system'
       },
       { new: true }
     );
 
-    // if (!task) {
-    //   return res.status(404).json({ 
-    //     success: false, 
-    //     message: 'Task not found' 
-    //   });
-    // }
-
-    await logActivity('status_change', 'task', task._id, 'system', 'System', {
+    await logActivity('status_change', 'task', task._id, req.body.userId || 'system', req.body.userName || 'System', {
       title: task.title,
       oldStatus: currentTask.status,
       newStatus: status
@@ -151,7 +378,7 @@ exports.updateTaskStatus = async (req, res) => {
         });
       }
 
-      await logActivity('delete', 'task', task._id, 'system', 'System', {
+      await logActivity('delete', 'task', task._id, req.body.userId || 'system', req.body.userName || 'System', {
         title: task.title,
         assignedUser: task.assignedUser
       });
@@ -174,7 +401,7 @@ exports.updateTaskStatus = async (req, res) => {
 exports.editTask = async (req, res, next) => {
   try {
       const { taskId } = req.params;
-      const { title, description, assignedUser, status, priority } = req.body;
+      const { title, description, assignedUser, status, priority, version, userId, userName } = req.body;
 
       // Get the current task first
       const currentTask = await Task.findById(taskId);
@@ -182,6 +409,18 @@ exports.editTask = async (req, res, next) => {
           return res.status(404).json({ 
               success: false, 
               message: 'Task not found' 
+          });
+      }
+
+      // Check for version conflict
+      if (version && currentTask.version > version) {
+          return res.status(409).json({
+              success: false,
+              message: 'Task has been modified by another user',
+              conflict: true,
+              currentTask: currentTask,
+              requestedVersion: version,
+              currentVersion: currentTask.version
           });
       }
 
@@ -194,7 +433,7 @@ exports.editTask = async (req, res, next) => {
           if (existingTitle) {
               return res.status(422).json({
                   message: "Validation failed",
-                  errors: errorMessages,
+                  errors: { title: 'Title already exists' },
                   success: false
               });
           }
@@ -225,9 +464,12 @@ exports.editTask = async (req, res, next) => {
           if (assignedUser && assignedUser !== currentTask.assignedUser) updateFields.assignedUser = assignedUser;
           if (status && status !== currentTask.status) updateFields.status = status;
           if (priority && priority !== currentTask.priority) updateFields.priority = priority;
+          
+          // Add metadata
+          updateFields.lastModifiedBy = userId || 'system';
   
           // Only update if there are changes
-          if (Object.keys(updateFields).length === 0) {
+          if (Object.keys(updateFields).length === 1 && updateFields.lastModifiedBy) {
               return res.status(200).json({
                   success: true,
                   message: 'No changes detected',
@@ -242,14 +484,21 @@ exports.editTask = async (req, res, next) => {
             { new: true }
           );
 
-          const changes = Object.keys(updateFields).map(field => {
-            return `${field}: ${currentTask[field]} → ${updateFields[field]}`;
-        }).join(', ');
+          // Unlock the task after successful edit
+          task.currentlyEditingBy = null;
+          task.editStartTime = null;
+          await task.save();
 
-        await logActivity('edit', 'task', task._id, 'system', 'System', {
+          const changes = Object.keys(updateFields)
+            .filter(field => field !== 'lastModifiedBy')
+            .map(field => {
+                return `${field}: ${currentTask[field]} → ${updateFields[field]}`;
+            }).join(', ');
+
+        await logActivity('edit', 'task', task._id, userId || 'system', userName || 'System', {
             title: task.title,
             changes: changes,
-            updatedFields: Object.keys(updateFields)
+            updatedFields: Object.keys(updateFields).filter(field => field !== 'lastModifiedBy')
         });
         
         res.status(200).json({
