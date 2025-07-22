@@ -171,6 +171,7 @@ const Dashboard = () => {
   const [editTaskMenu, setEditTaskMenu] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [activityLogOpen, setActivityLogOpen] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
   const [tasks, setTasks] = useState({
     todo: [],
     inprogress: [],
@@ -189,9 +190,51 @@ const Dashboard = () => {
   const userId = user._id || user.id || 'anonymous';
   const userName = user.fullName || user.name || 'Anonymous User';
 
+  const logout = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:3001/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        navigate('/login');
+      } else {
+        // Still remove local storage even if server logout fails
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        navigate('/login');
+      }
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Still remove local storage even if there's an error
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      navigate('/login');
+    }
+    setShowDropdown(false);
+  };
+
   const fetchTasks = async () => {
     try {
-      const response = await fetch('http://localhost:3001/todo/get-task');
+      const token = localStorage.getItem('token');
+      const headers = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch('http://localhost:3001/todo/get-task', {
+        headers
+      });
       if (response.ok) {
         const data = await response.json();
         const {tasks} = data;
@@ -214,6 +257,11 @@ const Dashboard = () => {
   };
 
   const updateTaskStatus = useCallback(async (taskId, newStatus) => {
+    if (!isLoggedIn) {
+      alert('Please login to update tasks');
+      return;
+    }
+
     try {
       const token = localStorage.getItem('token');
       const currentTask = Object.values(tasks).flat().find(task => task._id === taskId);
@@ -303,6 +351,11 @@ const Dashboard = () => {
   };
 
   const deleteTask = useCallback(async (taskId) => {
+    if (!isLoggedIn) {
+      alert('Please login to delete tasks');
+      return;
+    }
+
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(`http://localhost:3001/todo/delete-task/${taskId}`, {
@@ -343,6 +396,10 @@ const Dashboard = () => {
   }, [socket, userId, userName]);
 
   const handleEditTask = (task) => {
+    if (!isLoggedIn) {
+      alert('Please login to edit tasks');
+      return;
+    }
     setEditingTask(task);
     setEditTaskMenu(true);
   };
@@ -359,6 +416,11 @@ const Dashboard = () => {
   };
 
   const handleDrop = (taskId, newStatus) => {
+    if (!isLoggedIn) {
+      alert('Please login to update tasks');
+      handleDragEnd();
+      return;
+    }
     updateTaskStatus(taskId, newStatus);
     handleDragEnd();
   };
@@ -499,6 +561,20 @@ const Dashboard = () => {
     fetchTasks();
   }, []);
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showDropdown && !event.target.closest('.user-dropdown')) {
+        setShowDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showDropdown]);
+
   return (
     <main className="main">
       <Sidebar openSide={openSide} setOpenSide={setOpenSide} />
@@ -517,13 +593,22 @@ const Dashboard = () => {
             <span className="title">TaskFlow</span>
           </div>
           {isLoggedIn ? 
-          <div>
-            <div className="task-assigned">
+          <div className="user-dropdown">
+            <div className="user-info" onClick={() => setShowDropdown(!showDropdown)}>
               <img src={`https://ui-avatars.com/api/?name=${user.fullName}&background=random`} 
                   alt={user.fullName} 
                   className="avatar-2" />
               <span className="assigned-name-2">{user.fullName}</span>
+              <span style={{ marginLeft: '8px', fontSize: '12px' }}>▼</span>
             </div>
+            {showDropdown && (
+              <div className="dropdown-menu">
+                <button className="dropdown-item" onClick={logout}>
+                  <span className="logout-icon">🚪</span>
+                  Logout
+                </button>
+              </div>
+            )}
           </div>
           : 
           <div className="auth">
@@ -582,7 +667,13 @@ const Dashboard = () => {
             <button onClick={() => setActivityLogOpen(true)} className="activity-log-btn">
               📋 Activity Log
             </button>
-            <button onClick={() => setAddTaskMenu(true)} className="add-task-btn">
+            <button onClick={() => {
+              if (!isLoggedIn) {
+                alert('Please login to add tasks');
+                return;
+              }
+              setAddTaskMenu(true);
+            }} className="add-task-btn">
               + Add task
             </button>
           </div>

@@ -1,27 +1,22 @@
 const express = require('express');
+const { authenticateToken, optionalAuth } = require('../middleware/auth');
 
 const taskRouter = express.Router();
 
 const taskController = require('../controllers/taskController');
 
-taskRouter.post('/add-task', taskController.postAddTask);
+// Protected routes - require authentication
+taskRouter.post('/add-task', authenticateToken, taskController.postAddTask);
+taskRouter.put('/update-task-status/:taskId', authenticateToken, taskController.updateTaskStatus);
+taskRouter.delete('/delete-task/:taskId', authenticateToken, taskController.deleteTask);
+taskRouter.put('/edit-task/:taskId', authenticateToken, taskController.editTask);
+taskRouter.post('/lock-task/:taskId', authenticateToken, taskController.lockTaskForEditing);
+taskRouter.post('/unlock-task/:taskId', authenticateToken, taskController.unlockTask);
+taskRouter.post('/resolve-conflict/:taskId', authenticateToken, taskController.resolveTaskConflict);
 
-taskRouter.get('/get-task', taskController.getTask);
-
-taskRouter.put('/update-task-status/:taskId', taskController.updateTaskStatus);
-
-taskRouter.delete('/delete-task/:taskId', taskController.deleteTask);
-
-taskRouter.put('/edit-task/:taskId', taskController.editTask);
-
-taskRouter.get('/smart-assign-suggestion', taskController.getSmartAssignSuggestion);
-
-taskRouter.post('/lock-task/:taskId', taskController.lockTaskForEditing);
-
-taskRouter.post('/unlock-task/:taskId', taskController.unlockTask);
-
-taskRouter.get('/check-conflict/:taskId', taskController.checkTaskConflict);
-
-taskRouter.post('/resolve-conflict/:taskId', taskController.resolveTaskConflict);
+// Read-only routes - optional authentication
+taskRouter.get('/get-task', optionalAuth, taskController.getTask);
+taskRouter.get('/smart-assign-suggestion', optionalAuth, taskController.getSmartAssignSuggestion);
+taskRouter.get('/check-conflict/:taskId', optionalAuth, taskController.checkTaskConflict);
 
 module.exports = taskRouter;
