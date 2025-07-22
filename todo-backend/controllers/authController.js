@@ -153,3 +153,32 @@ exports.postLogin = async (req, res, next) => {
         });
     }
 }
+
+exports.postLogout = async (req, res) => {
+    try {
+        // Destroy the session
+        req.session.destroy((err) => {
+            if (err) {
+                console.error('Logout error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Error during logout. Please try again.',
+                });
+            }
+            
+            // Clear the session cookie
+            res.clearCookie('connect.sid');
+            
+            return res.status(200).json({
+                success: true,
+                message: 'Logout successful'
+            });
+        });
+    } catch (error) {
+        console.error('Logout error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Internal server error during logout.',
+        });
+    }
+};

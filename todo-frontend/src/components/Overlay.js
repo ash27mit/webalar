@@ -88,10 +88,12 @@ const Overlay = ({ onClose, fetchTasks, setAddTaskMenu, editingTask, isEditing =
         if (!editingTask) return;
         
         try {
+            const token = localStorage.getItem('token');
             const response = await fetch(`http://localhost:3001/todo/lock-task/${editingTask._id}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({ userId, userName })
             });
@@ -113,10 +115,12 @@ const Overlay = ({ onClose, fetchTasks, setAddTaskMenu, editingTask, isEditing =
         if (!editingTask) return;
         
         try {
+            const token = localStorage.getItem('token');
             await fetch(`http://localhost:3001/todo/unlock-task/${editingTask._id}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({ userId })
             });
@@ -145,10 +149,12 @@ const Overlay = ({ onClose, fetchTasks, setAddTaskMenu, editingTask, isEditing =
 
     const handleConflictResolution = async (resolution) => {
         try {
+            const token = localStorage.getItem('token');
             const response = await fetch(`http://localhost:3001/todo/resolve-conflict/${editingTask._id}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({
                     resolution,
@@ -203,9 +209,13 @@ const Overlay = ({ onClose, fetchTasks, setAddTaskMenu, editingTask, isEditing =
         socket.emit("form-data", {message: "Task Added"});
 
         try {
+            const token = localStorage.getItem('token');
             const response = await fetch('http://localhost:3001/todo/add-task', {
               method: "POST",
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
               body: JSON.stringify({
                 ...formData,
                 userId,
@@ -313,7 +323,12 @@ const Overlay = ({ onClose, fetchTasks, setAddTaskMenu, editingTask, isEditing =
     const handleSmartAssign = async () => {
         setSmartAssignLoading(true);
         try {
-            const response = await fetch('http://localhost:3001/todo/smart-assign-suggestion');
+            const token = localStorage.getItem('token');
+            const response = await fetch('http://localhost:3001/todo/smart-assign-suggestion', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
             const data = await response.json();
             
             if (data.success && data.suggestedUser) {
