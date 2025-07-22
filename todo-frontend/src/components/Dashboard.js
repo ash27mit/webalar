@@ -3,6 +3,7 @@ import "./Dashboard.css";
 import Sidebar from "./Sidebar";
 import Overlay from "./Overlay";
 import ActivityLog from "./ActivityLog";
+import ConflictModal from "./ConflictModal";
 import { useNavigate } from "react-router-dom";
 import io from "socket.io-client";
 
@@ -28,6 +29,27 @@ const TaskCard = ({ task, onDragStart, isDragging, draggedTaskId, onEdit, onDele
       onDelete(task._id);
     }
     setShowActions(false);
+  };
+
+  const getTimeAgo = (date) => {
+    if (!date) return '';
+    
+    const now = new Date();
+    const completedDate = new Date(date);
+    const diffInMs = now - completedDate;
+    const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+    const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
+    const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
+
+    if (diffInDays > 0) {
+      return `${diffInDays} day${diffInDays > 1 ? 's' : ''} ago`;
+    } else if (diffInHours > 0) {
+      return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
+    } else if (diffInMinutes > 0) {
+      return `${diffInMinutes} minute${diffInMinutes > 1 ? 's' : ''} ago`;
+    } else {
+      return 'Just now';
+    }
   };
 
   return (
@@ -73,10 +95,16 @@ const TaskCard = ({ task, onDragStart, isDragging, draggedTaskId, onEdit, onDele
                className="avatar" />
           <span className="assigned-name">{task.assignedUser}</span>
         </div>
-        {task.status === 'done' && (
+        {task.status === 'done' && task.completedAt && (
           <div className="completed-info">
             <span className="checkmark">✓</span>
-            <span>Completed 2 days ago</span>
+            <span className="completed-text">Completed {getTimeAgo(task.completedAt)}</span>
+          </div>
+        )}
+        {task.currentlyEditingBy && (
+          <div className="editing-indicator">
+            <span className="editing-icon">✏️</span>
+            <span className="editing-text">Being edited</span>
           </div>
         )}
       </div>
@@ -153,8 +181,13 @@ const Dashboard = () => {
   const [draggedTaskId, setDraggedTaskId] = useState(null);
   const [dragOverColumn, setDragOverColumn] = useState(null);
 
+  const [showConflictModal, setShowConflictModal] = useState(false);
+  const [conflictData, setConflictData] = useState(null);
+
   const isLoggedIn = localStorage.getItem('token');
-  const user = JSON.parse(localStorage.getItem('user'));
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const userId = user._id || user.id || 'anonymous';
+  const userName = user.fullName || user.name || 'Anonymous User';
 
   const fetchTasks = async () => {
     try {
@@ -183,14 +216,22 @@ const Dashboard = () => {
   const updateTaskStatus = useCallback(async (taskId, newStatus) => {
     try {
       const token = localStorage.getItem('token');
+      const currentTask = Object.values(tasks).flat().find(task => task._id === taskId);
       const response = await fetch(`http://localhost:3001/todo/update-task-status/${taskId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify({ 
+          status: newStatus,
+          version: currentTask?.version,
+          userId,
+          userName
+        })
       });
+
+      const data = await response.json();
 
       if (response.ok) {
         // Optimistically update the UI
@@ -213,15 +254,53 @@ const Dashboard = () => {
 
         // Emit socket event to notify other users
         socket.emit('task-status-updated', { taskId, newStatus });
+      } else if (response.status === 409 && data.conflict) {
+        // Handle conflict
+        setConflictData({
+          currentTask: data.currentTask,
+          userChanges: { status: newStatus },
+          taskId: taskId,
+          conflictType: 'status'
+        });
+        setShowConflictModal(true);
       } else {
-        console.error('Failed to update task status');
+        console.error('Failed to update task status:', data.message);
         // Optionally show error message to user
       }
     } catch (error) {
       console.error('Error updating task status:', error);
       // Optionally show error message to user
     }
-  }, [socket]);
+  }, [socket, tasks, userId, userName]);
+
+  const handleStatusConflictResolution = async (resolution) => {
+    try {
+      const response = await fetch(`http://localhost:3001/todo/resolve-conflict/${conflictData.taskId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          resolution,
+          userChanges: conflictData.userChanges,
+          currentVersion: conflictData.currentTask.version,
+          userId,
+          userName
+        })
+      });
+
+      if (response.ok) {
+        await fetchTasks();
+        setShowConflictModal(false);
+        setConflictData(null);
+      } else {
+        throw new Error('Failed to resolve conflict');
+      }
+    } catch (error) {
+      console.error('Error resolving conflict:', error);
+      alert('Failed to resolve conflict. Please try again.');
+    }
+  };
 
   const deleteTask = useCallback(async (taskId) => {
     try {
@@ -229,8 +308,10 @@ const Dashboard = () => {
       const response = await fetch(`http://localhost:3001/todo/delete-task/${taskId}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ userId, userName })
       });
 
       if (response.ok) {
@@ -259,7 +340,7 @@ const Dashboard = () => {
       console.error('Error deleting task:', error);
       alert('Error deleting task');
     }
-  }, [socket]);
+  }, [socket, userId, userName]);
 
   const handleEditTask = (task) => {
     setEditingTask(task);
@@ -354,6 +435,49 @@ const Dashboard = () => {
       });
     });
 
+    socket.on("task-locked", (data) => {
+      // Update UI to show task is being edited
+      setTasks(prevTasks => {
+        const newTasks = { todo: [], inprogress: [], done: [] };
+        
+        Object.keys(prevTasks).forEach(status => {
+          prevTasks[status].forEach(task => {
+            if (task._id === data.taskId) {
+              newTasks[status].push({ 
+                ...task, 
+                currentlyEditingBy: data.editorName,
+                editStartTime: data.editStartTime 
+              });
+            } else {
+              newTasks[status].push(task);
+            }
+          });
+        });
+        
+        return newTasks;
+      });
+    });
+
+    socket.on("task-unlocked", (data) => {
+      // Update UI to remove editing indicator
+      setTasks(prevTasks => {
+        const newTasks = { todo: [], inprogress: [], done: [] };
+        
+        Object.keys(prevTasks).forEach(status => {
+          prevTasks[status].forEach(task => {
+            if (task._id === data.taskId) {
+              const { currentlyEditingBy, editStartTime, ...cleanTask } = task;
+              newTasks[status].push(cleanTask);
+            } else {
+              newTasks[status].push(task);
+            }
+          });
+        });
+        
+        return newTasks;
+      });
+    });
+
     const handleGlobalDragEnd = () => {
       handleDragEnd();
     };
@@ -365,6 +489,8 @@ const Dashboard = () => {
       socket.off("task-status-updated");
       socket.off("task-deleted");
       socket.off("task-updated");
+      socket.off("task-locked");
+      socket.off("task-unlocked");
       document.removeEventListener('dragend', handleGlobalDragEnd);
     };
   }, [socket]);
@@ -432,6 +558,20 @@ const Dashboard = () => {
           isOpen={activityLogOpen}
           onClose={() => setActivityLogOpen(false)}
         />
+
+        {showConflictModal && conflictData && (
+          <ConflictModal
+            isOpen={showConflictModal}
+            onClose={() => {
+              setShowConflictModal(false);
+              setConflictData(null);
+            }}
+            currentTask={conflictData.currentTask}
+            userChanges={conflictData.userChanges}
+            onResolve={handleStatusConflictResolution}
+            conflictType={conflictData.conflictType}
+          />
+        )}
 
         <div className="top-row">
           <div className="search-in">
